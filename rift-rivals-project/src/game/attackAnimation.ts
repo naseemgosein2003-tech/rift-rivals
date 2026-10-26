@@ -16,6 +16,12 @@ export interface AttackMotion {
   impact: number;
   /** 0..1 opacity of the motion trail, including a very short fade-out. */
   trail: number;
+  /** Whip-through at contact; nonzero only while the weapon is accelerating. */
+  whip: number;
+  /** Shoulder / spine counter-motion that peaks AFTER the swing connects. */
+  follow: number;
+  /** Small release bounce as the fighter regains a neutral guard. */
+  settle: number;
   /** Whether the actual move is in its attack-active frames. */
   active: boolean;
 }
@@ -28,7 +34,7 @@ export function sampleAttackMotion(attack: Attack): AttackMotion {
   const move = attack.move;
   // Recovery and specials have their own choreography, not this move timeline.
   if (!move) {
-    return { windup: 0, strike: 0, recovery: 0, impact: 0, trail: 0, active: false };
+    return { windup: 0, strike: 0, recovery: 0, impact: 0, trail: 0, whip: 0, follow: 0, settle: 0, active: false };
   }
   const start = Math.max(0, move.startup);
   const activeLength = Math.max(0.001, move.active);
@@ -41,6 +47,9 @@ export function sampleAttackMotion(attack: Attack): AttackMotion {
     clamp01((t - end) / Math.max(0.001, attack.duration - end)),
   );
   const impact = Math.sin(strikeT * Math.PI) * (1 - recovery);
+  const whip = Math.sin(Math.PI * Math.min(1, strikeT)) * (1 - recovery);
+  const follow = snap(strikeT) * (1 - recovery) * (0.7 + 0.3 * strikeT);
+  const settle = Math.sin(recovery * Math.PI) * (t >= end ? 1 : 0);
   const trailFade = Math.max(0, 1 - (t - end) / 0.075);
   const trail = t < start || t >= attack.duration
     ? 0
@@ -52,6 +61,9 @@ export function sampleAttackMotion(attack: Attack): AttackMotion {
     recovery,
     impact,
     trail,
+    whip,
+    follow,
+    settle,
     active: t >= start && t <= end,
   };
 }
@@ -63,6 +75,9 @@ export function attackPoseValue(
   followThrough: number,
   motion: AttackMotion,
 ): number {
-  const held = anticipation + (followThrough - anticipation) * motion.strike;
+  // Slightly overshoot the impact pose, then release it. This adds visible
+  // acceleration without delaying gameplay's original active hit frames.
+  const snapThrough = motion.strike + motion.whip * 0.085;
+  const held = anticipation + (followThrough - anticipation) * snapThrough;
   return rest + (held - rest) * motion.windup * (1 - motion.recovery);
 }

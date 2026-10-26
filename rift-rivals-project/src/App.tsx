@@ -591,7 +591,7 @@ function Help({ onClose }: { onClose: () => void }) {
         </Key>,
       ],
       detail:
-        "Dodge on the ground or in the air. Invincible for 0.3s; 2s cooldown.",
+        "Dodge on the ground or in the air. 0.18s safety, then 0.12s punishable recovery; 2s cooldown. Cannot cancel attacks.",
     },
     {
       label: "Swap weapon",
@@ -711,7 +711,7 @@ function Help({ onClose }: { onClose: () => void }) {
               [
                 "06",
                 "THE BEST DEFENSE IS TIMING.",
-                "Dodge on the ground or in the air to escape an attack. Hold up or down for a vertical air dodge. You are invulnerable for 0.3 seconds, with a shared two-second cooldown.",
+                "Dodge on the ground or in the air to escape an attack. Hold jump or down for a vertical air dodge. The first 0.18 seconds are invulnerable; the final 0.12 seconds can be punished. Dodging cannot cancel an attack or its recovery, and has a shared two-second cooldown.",
                 Shield,
               ],
             ].map(([number, title, description, Icon]) => {

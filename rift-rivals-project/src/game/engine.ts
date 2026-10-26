@@ -15,6 +15,7 @@ import {
   type Weapon,
 } from "./data";
 import { renderGame } from "./renderer";
+import { DODGE_COOLDOWN, DODGE_DURATION, DODGE_IFRAMES, DODGE_SPEED } from "./dodge";
 import { getMove, stanceFor, type MoveDef, type Stance } from "./moves";
 import {
   getSharedThreeRenderer,
@@ -24,6 +25,8 @@ import {
 export const WIDTH = 1280;
 export const HEIGHT = 720;
 export const MAX_JUMPS = 3;
+export { DODGE_COOLDOWN, DODGE_DURATION, DODGE_IFRAMES, DODGE_SPEED } from "./dodge";
+
 
 /** A live platform, including its drift so grounded fighters ride along. */
 export interface Platform extends StagePlatform {
@@ -130,6 +133,9 @@ export interface Fighter {
   attackCD: number;
   dodgeCD: number;
   dodgeTime: number;
+  /** The direction of the most recent dodge for animation afterimages. */
+  dodgeVectorX: number;
+  dodgeVectorY: number;
   invulnerable: number;
   stun: number;
   slow: number;
@@ -326,6 +332,8 @@ function makeFighter(
     attackCD: 0,
     dodgeCD: 0,
     dodgeTime: 0,
+    dodgeVectorX: 0,
+    dodgeVectorY: 0,
     invulnerable: 0,
     stun: 0,
     slow: 0,
@@ -671,7 +679,7 @@ export class Engine {
       if (e.kind === "vortex" && this.phase === "running") {
         const other = this.fighters[1 - e.owner];
         const distance = Math.hypot(other.x - e.x, other.y - 45 - e.y);
-        if (distance < e.radius && other.respawn <= 0 && other.dodgeTime <= 0) {
+        if (distance < e.radius && other.respawn <= 0 && other.invulnerable <= 0) {
           if (e.time < 0.72) {
             other.vx += (e.x - other.x) * dt * 13;
             other.vy += (e.y + 45 - other.y) * dt * 8;
@@ -821,6 +829,7 @@ export class Engine {
         f.cuttable = false;
         f.channeling = false;
         f.signatureDodge = 0;
+        f.dodgeTime = 0;
         f.stun = 0;
         this.burst(f.x, f.y - 40, f.def.color, 26, 140, "glow");
       }
@@ -866,29 +875,40 @@ export class Engine {
         });
       }
     }
-    if (!f.channeling && taps.has("dodge") && f.dodgeCD <= 0) {
-      f.dodgeCD = 2;
-      f.dodgeTime = 0.3;
-      f.invulnerable = Math.max(f.invulnerable, 0.3);
-      if (!f.grounded) {
-        if (direction) {
-          f.vx = direction * 720;
-          f.vy *= 0.15;
-        } else if (held.has("jump") || held.has("down")) {
-          f.vx *= 0.25;
-          f.vy = held.has("down") ? 600 : -600;
-        } else {
-          f.vx *= 0.08;
-          f.vy *= 0.08;
-        }
+    // Escape a combo with a committed dodge. You cannot cancel a live attack,
+    // its endlag, a special cast, or landing recovery just to gain free i-frames.
+    // Stunned defenders may still spend their two-second cooldown to break out.
+    if (
+      !f.channeling && taps.has("dodge") && f.dodgeCD <= 0 &&
+      f.dodgeTime <= 0 && !f.attack && (f.stun > 0 || f.attackCD <= 0) &&
+      f.specialTime <= 0 && f.landingLag <= 0
+    ) {
+      f.dodgeCD = DODGE_COOLDOWN;
+      f.dodgeTime = DODGE_DURATION;
+      // Only the first 0.18s is safe; the final 0.12s is punishable recovery.
+      f.invulnerable = Math.max(f.invulnerable, DODGE_IFRAMES);
+      const air = !f.grounded;
+      // Air dodge selection: left/right takes priority, then down / jump(up).
+      // Neutral air dodge holds position without refreshing a jump or recovery.
+      const vertical = air && !direction && (held.has("down") || held.has("jump"));
+      f.dodgeVectorX = vertical ? 0 : (direction || (!air ? f.facing : 0));
+      f.dodgeVectorY = vertical ? (held.has("down") ? 1 : -1) : 0;
+      if (f.dodgeVectorX) {
+        f.vx = f.dodgeVectorX * DODGE_SPEED;
+        if (air) f.vy *= 0.1;
+        else f.vy = 0;
+      } else if (f.dodgeVectorY) {
+        f.vx *= 0.12;
+        f.vy = f.dodgeVectorY * DODGE_SPEED;
       } else {
-        f.vx = (direction || f.facing) * 720;
-        f.vy *= 0.15;
+        f.vx *= 0.1;
+        f.vy *= 0.1;
       }
       f.stun = 0;
-      f.attack = null;
+      f.cuttable = false;
+      f.bufferedAction = null;
       f.bufferTime = 0;
-      this.burst(f.x, f.y - 35, "#bcd8f0", 14, 130, "dust");
+      this.burst(f.x, f.y - 35, "#bcd8f0", 12, 110, "dust");
       audio.dodge();
     }
     if (f.dodgeTime > 0) {
@@ -1755,7 +1775,6 @@ export class Engine {
     if (
       this.phase !== "running" ||
       victim.invulnerable > 0 ||
-      victim.dodgeTime > 0 ||
       victim.respawn > 0 ||
       victim.stocks <= 0
     )
@@ -1777,6 +1796,7 @@ export class Engine {
       Math.max((heavy ? 0.26 : 0.14) * (move?.stun ?? 1), signatureStunSec),
     );
     victim.attack = null;
+    victim.dodgeTime = 0; // a hit during vulnerable dodge recovery interrupts the roll
     victim.landingLag = 0;
     victim.cuttable = false;
     const direction = victim.x >= attacker.x ? 1 : -1;
