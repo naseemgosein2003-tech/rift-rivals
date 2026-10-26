@@ -2,6 +2,7 @@ import type { Engine, Fighter } from "./engine";
 import type { Weapon } from "./data";
 import type { MoveDef } from "./moves";
 import { attackPoseValue, sampleAttackMotion } from "./attackAnimation";
+import { dodgeProgress, rollEase } from "./dodge";
 
 const TAU = Math.PI * 2;
 
@@ -1283,8 +1284,9 @@ function buildPose(f: Fighter, time: number, move: MoveDef | null): Pose {
   const weapon = f.def.weapons[f.weapon];
   const grip = GRIP[weapon];
   const walking = Math.abs(f.vx) > 30 && f.grounded;
-  const cycle = time * 15;
-  const run = walking ? Math.sin(cycle) : 0;
+  const stride = Math.min(1.15, Math.abs(f.vx) / 330);
+  const cycle = time * (8 + 7 * stride);
+  const run = walking && f.dodgeTime <= 0 ? Math.sin(cycle) * stride : 0;
   const idleBreath = Math.sin(time * 2.4) * 1.3;
   const shoulderX = 9;
   const shoulderY = -62;
@@ -1310,8 +1312,8 @@ function buildPose(f: Fighter, time: number, move: MoveDef | null): Pose {
     angle = pose(grip.idle, anim.a0, anim.a1);
     reach = pose(grip.reach, anim.r0, anim.r1);
     lean = pose(lean, -0.20 * power, (down ? 0.26 : 0.22) * power);
-    lean += motion.impact * 0.04 * power;
-    crouch = pose(0, heavy ? 9 : 6, down ? 14 : side ? 6 : 2);
+    lean += motion.impact * 0.065 * power - motion.settle * 0.025;
+    crouch = pose(0, heavy ? 11 : 7, down ? 15 : side ? 7 : 3) - motion.whip * 2;
     if (anim.arc === "shoot") {
       // A little punchy kickback on the muzzle, without moving the hitbox.
       reach -= motion.impact * (heavy ? 11 : 7);
@@ -1331,9 +1333,6 @@ function buildPose(f: Fighter, time: number, move: MoveDef | null): Pose {
     reach = 54;
     lean = -0.1;
   }
-
-  const handX = shoulderX + Math.cos(angle) * reach + lean * 13;
-  const handY = shoulderY + Math.sin(angle) * reach + (move?.anim.lift ?? 0);
 
   let footAX: number;
   let footAY: number;
@@ -1366,13 +1365,33 @@ function buildPose(f: Fighter, time: number, move: MoveDef | null): Pose {
     const push = m.strike * m.windup * (1 - m.recovery);
     const brace = m.windup * (1 - m.strike) * (1 - m.recovery);
     footAX -= brace * 7;
-    footBX += push * (attack.stance[1] === "S" ? 13 : 5);
+    footBX += push * (attack.stance[1] === "S" ? 15 : 6);
     footAY -= push * (attack.stance[1] === "D" ? 4 : 0);
+    footAX -= m.whip * (attack.stance[1] === "S" ? 4 : 2);
+    footBX += m.follow * 3;
+  }
+
+  // The fallback fighter tucks into a dodge instead of rotating as a rigid
+  // paper cutout. The same 0.30s dodge timeline drives the WebGL skeleton.
+  if (f.dodgeTime > 0) {
+    const progress = dodgeProgress(f.dodgeTime);
+    const tuck = Math.sin(progress * Math.PI);
+    crouch += 10 * tuck;
+    lean += (f.dodgeVectorX || f.facing) * 0.2 * tuck;
+    angle = grip.idle - 1.1 * tuck;
+    reach *= 1 - tuck * 0.24;
+    footAX = -7 - tuck * 2;
+    footBX = 8 + tuck * 2;
+    footAY = -tuck * 16;
+    footBY = -tuck * 12;
   }
 
   const hipY =
     (f.grounded ? (walking ? Math.abs(run) * 2.5 : idleBreath * 0.5) : -2) +
     crouch;
+
+  const handX = shoulderX + Math.cos(angle) * reach + lean * 13;
+  const handY = shoulderY + Math.sin(angle) * reach + (move?.anim.lift ?? 0);
 
   return {
     hipX: f.grounded ? lean * 10 : 2,
@@ -1380,8 +1399,8 @@ function buildPose(f: Fighter, time: number, move: MoveDef | null): Pose {
     lean,
     handX,
     handY,
-    offHandX: -14 - (activeMotion ? 11 * activeMotion.windup : 0) + Math.sin(time * 2.3) * 1.5,
-    offHandY: -40 - (activeMotion ? 10 * activeMotion.strike : 0) + idleBreath,
+    offHandX: -14 - (activeMotion ? 11 * activeMotion.windup - 8 * activeMotion.follow : 0) + Math.sin(time * 2.3) * 1.5,
+    offHandY: -40 - (activeMotion ? 13 * activeMotion.strike - 5 * activeMotion.settle : 0) + idleBreath,
     footAX,
     footAY,
     footBX,
@@ -2052,17 +2071,18 @@ export function drawFighter(
     }
   }
   if (f.dodgeTime > 0) {
+    const ghostDirection = f.dodgeVectorX || f.facing;
     for (let i = 1; i < 5; i++) {
       ctx.save();
       ctx.globalAlpha = 0.13 * (1 - i / 5);
       ctx.fillStyle = c;
       ctx.beginPath();
       ctx.ellipse(
-        f.x - f.facing * i * 19,
-        f.y - 45,
+        f.x - ghostDirection * i * 15,
+        f.y - 45 - f.dodgeVectorY * i * 10,
         22,
         43,
-        -f.facing * 0.5,
+        -ghostDirection * 0.5,
         0,
         TAU,
       );
@@ -2078,9 +2098,13 @@ export function drawFighter(
     build.tall * (1 - f.landSquash * 0.12),
   );
   if (f.invulnerable > 0 && Math.sin(time * 35) > 0) ctx.globalAlpha = 0.55;
-  ctx.rotate(
-    f.dodgeTime > 0 ? 0.25 : f.stun > 0 ? -0.16 : f.vx * f.facing * 0.0001,
-  );
+  if (f.dodgeTime > 0) {
+    const p = dodgeProgress(f.dodgeTime);
+    const dir = f.dodgeVectorX || f.facing;
+    ctx.rotate((f.dodgeVectorY ? -f.dodgeVectorY : dir) * TAU * rollEase(p));
+  } else {
+    ctx.rotate(f.stun > 0 ? -0.16 : f.vx * f.facing * 0.0001);
+  }
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
