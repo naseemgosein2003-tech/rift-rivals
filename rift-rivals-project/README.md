@@ -25,7 +25,8 @@ Select one of 25 fighters and their unique dual-weapon loadout. Before each figh
 - Every signature has a bespoke 3D animation and 2D flourish, applies a longer signature stun on hit (shown by STUNNED stars), and opens with a 0.50s dodge window that lets the caster pass through incoming attacks.
 - Ordinary ranged shots expire at the weapon's reach (Blasters 520, Bow 600, Orb 460 world units), rather than flying forever. Specials have their own finite longer reach.
 - You have three jumps total (one ground jump and two air jumps), plus one separate upward recovery attack per airtime. Landing restores both jumps and recovery.
-- Dodge works on the ground and in the air, grants 0.3 seconds of invulnerability, cancels hitstun, and has a shared two-second cooldown. Hold up or down for a vertical air dodge.
+- Balanced defensive dodge: ground rolls, side/vertical/neutral air dodges, and hitstun escapes share a **2-second cooldown**. The first **0.18 seconds** are invulnerable; the final **0.12 seconds** are vulnerable, punishable recovery. Dodging cannot cancel an active attack, attack cooldown, signature cast, or landing lag. In the air, hold left/right for a directional dodge or jump/down (without left/right) for vertical movement. Neutral air dodges stall briefly. Dodges do not restore jumps or aerial recovery.
+- 3D and fallback 2D animations use the same contact-timed wind-up, whip, follow-through and settle phases. 3D fighters now have speed-matched gait, shoulder/hip counter-rotation, head lag, impact squash, foot bracing, and a tucked dodge roll. These are **visual-only** pose updates; existing hitboxes and weapon balance are unchanged.
 - Coyote time, buffered attacks, and preserved air momentum keep movement responsive.
 - Movement is tuned for flow: variable jump height (release jump to cut it short), a brief apex hang, hold-down fast-fall, turn-around acceleration, and smooth knockback decay with directional influence (hold a direction while launched to steer).
 - A gently eased camera drifts toward the action, and 3D fighters blend between poses and pivot to face their rival instead of snapping, so exchanges read smoothly at any refresh rate.
@@ -82,7 +83,7 @@ Five tiers — Novice, Rookie, Rival, Veteran, Legend — each tune reaction tim
 | Pause / resume                        | Escape or P  | Escape or P         |
 | Restart while paused or after a match | R            | R                   |
 
-Hold left/right or down while pressing light/heavy in the air to use air-side or air-down attacks; no direction uses air-neutral. Recovery is separate from the charged signature move and does not use its meter. Ground and air dodge share a two-second cooldown; hold a direction while dodging in the air, or use neutral dodge to briefly stall. Touch controls include Charge and Recover buttons and a full directional pad, plus a second control set for local duels. Landscape offers the widest view. Fullscreen, sound effects, and screen shake are optional.
+Hold left/right or down while pressing light/heavy in the air to use air-side or air-down attacks; no direction uses air-neutral. Recovery is separate from the charged signature move and does not use its meter. Ground and air dodge share a two-second cooldown; only the first 0.18 seconds of the 0.30-second motion are invulnerable. Hold a direction while dodging in the air, or use neutral dodge to briefly stall. Touch controls include Charge and Recover buttons and a full directional pad, plus a second control set for local duels. Landscape offers the widest view. Fullscreen, sound effects, and screen shake are optional.
 
 ## Verify
 
