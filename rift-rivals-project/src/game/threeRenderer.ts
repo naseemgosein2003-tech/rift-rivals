@@ -3,6 +3,7 @@ import type { Engine, Fighter } from "./engine";
 import type { Weapon } from "./data";
 import type { MoveDef } from "./moves";
 import { attackPoseValue, sampleAttackMotion } from "./attackAnimation";
+import { dodgeProgress, rollEase } from "./dodge";
 
 const WIDTH = 1280;
 const HEIGHT = 720;
@@ -577,6 +578,7 @@ export class FighterRig3D {
   private builtSheathed: Weapon | "" = "";
   private lastTime = -1;
   private yawSmooth = 0;
+  private gaitPhase = 0;
   private poseReady = false;
   private bones: THREE.Object3D[] = [];
   private prevRot = new Float32Array(30);
@@ -2146,6 +2148,7 @@ export class FighterRig3D {
       this.builtWeapon = "";
       this.builtSheathed = "";
       this.poseReady = false;
+      this.gaitPhase = 0;
     }
 
     // Snapshot rotations into preallocated buffers (no per-frame allocation).
@@ -2186,7 +2189,12 @@ export class FighterRig3D {
 
     // Place feet on exact arena plane (x, -y, 0)
     const prop = PROPORTIONS_3D[id] ?? PROPORTIONS_3D.ronin;
-    const squash = f.landSquash * 0.13;
+    const attackMotion = f.attack?.move ? sampleAttackMotion(f.attack) : null;
+    const anticipation = attackMotion
+      ? attackMotion.windup * (1 - attackMotion.strike) * (1 - attackMotion.recovery)
+      : 0;
+    const compression = Math.min(0.1, anticipation * 0.035 + (attackMotion?.impact ?? 0) * 0.026);
+    const squash = f.landSquash * 0.13 + compression;
     this.group.position.set(x, -y, 0);
     this.group.scale.set(
       prop.wide * (1 + squash * 0.7),
@@ -2196,9 +2204,12 @@ export class FighterRig3D {
     this.spine.scale.set(prop.chest / prop.wide, 1, 1);
     this.neck.scale.setScalar(prop.head);
 
-    const walking = Math.abs(f.vx) > 30 && f.grounded;
-    const cycle = time * 15;
-    const run = walking ? Math.sin(cycle) : 0;
+    const walking = Math.abs(f.vx) > 30 && f.grounded && f.dodgeTime <= 0;
+    const stride = Math.min(1.3, Math.abs(f.vx) / 330);
+    // Integrate speed-dependent gait rather than phase = time * speed (which
+    // jumps in phase whenever the fighter accelerates or slows down).
+    if (walking) this.gaitPhase += dt * (8 + 7 * stride);
+    const run = walking ? Math.sin(this.gaitPhase) * Math.min(1.15, stride) : 0;
     const breath = Math.sin(time * 2.6 + f.player * 1.7);
 
     // Base 3-quarter 3D hero angle, turned smoothly along the shortest arc so
@@ -2216,7 +2227,7 @@ export class FighterRig3D {
 
     if (walking) {
       hipBob = Math.abs(run) * 3.2;
-      pitch = 0.14;
+      pitch = 0.14 * Math.min(1.2, stride);
       this.rightHip.rotation.set(-run * 0.72, 0, 0);
       this.rightKnee.rotation.set(Math.max(0, run) * 0.85 + 0.12, 0, 0);
       this.leftHip.rotation.set(run * 0.72, 0, 0);
@@ -2245,6 +2256,8 @@ export class FighterRig3D {
     const attack = f.attack;
     const move: MoveDef | null = attack?.move ?? null;
     let spineTwist = walking ? run * 0.22 : breath * 0.04;
+    let spinePitch = 0.05 + (walking ? 0.08 * stride : 0);
+    let chestRoll = walking ? -run * 0.045 : breath * 0.015;
     let crouch = 0;
 
     if (attack) {
@@ -2425,7 +2438,7 @@ export class FighterRig3D {
         // Regular attacks are animated in the same startup / hit / recovery
         // windows as the engine. The whole body anticipates, accelerates into
         // the strike, and follows through; never alter physical hitboxes here.
-        const m = sampleAttackMotion(attack);
+        const m = attackMotion!;
         const pose = (rest: number, wind: number, hit: number) =>
           attackPoseValue(rest, wind, hit, m);
         const heavy = attack.kind === "heavy";
@@ -2437,13 +2450,15 @@ export class FighterRig3D {
         const hit = m.strike * m.windup * (1 - m.recovery);
 
         // Counter-rotation of hips, spine and shoulders adds readable weight.
-        spineTwist = pose(spineTwist, -0.44 * power, 0.64 * power);
-        yaw += pose(0, -0.14, 0.2) * f.facing;
+        spineTwist = pose(spineTwist, -0.52 * power, 0.76 * power) + m.follow * 0.08 * power;
+        spinePitch = pose(spinePitch, -0.19 * power, (down ? 0.32 : side ? 0.16 : -0.16) * power);
+        chestRoll += pose(0, -0.1, 0.18) * f.facing * power;
+        yaw += pose(0, -0.14, 0.24) * f.facing;
         pitch += pose(0, -0.18, down ? 0.34 : side ? 0.2 : -0.1) * power;
-        hipBob += m.impact * (heavy ? 3 : 1.4);
-        crouch += pose(0, heavy ? 7 : 4, down ? 12 : side ? 4 : 2);
+        hipBob += m.impact * (heavy ? 4.5 : 2.2) - m.settle * 2;
+        crouch += pose(0, heavy ? 9 : 5, down ? 13 : side ? 5 : 3) - m.whip * 2;
         const advance = pose(0, -3, side ? 9 : down ? 3 : 5) * power;
-        this.pelvis.position.x = advance * f.facing;
+        this.pelvis.position.x = (advance + m.whip * (side ? 3.5 : 1.2)) * f.facing;
 
         if (arcType === "spin") {
           // Spin only through the hit window, not through the windup/recovery.
@@ -2502,8 +2517,12 @@ export class FighterRig3D {
         if (!aerial && f.grounded) {
           this.rightHip.rotation.x += wind * 0.24 - hit * 0.3;
           this.leftHip.rotation.x += wind * -0.24 + hit * 0.3;
-          this.rightKnee.rotation.x += hit * (down ? 0.64 : 0.18);
-          this.leftKnee.rotation.x += wind * 0.24;
+          this.rightKnee.rotation.x += hit * (down ? 0.64 : 0.18) + m.whip * 0.12;
+          this.leftKnee.rotation.x += wind * 0.24 + m.follow * (side ? 0.18 : 0.04);
+          // Push from the planted rear leg so the strike reads as a whole-body
+          // transfer rather than hands moving on a motionless mannequin.
+          this.rightHip.rotation.z -= wind * 0.11;
+          this.leftHip.rotation.z += hit * 0.13;
         } else if (aerial) {
           this.rightHip.rotation.x += hit * (down ? 0.75 : -0.35);
           this.leftHip.rotation.x -= hit * (down ? 0.3 : 0.4);
@@ -2548,10 +2567,32 @@ export class FighterRig3D {
       this.leftWrist.rotation.set(-0.35, 0, 0);
     }
 
-    // 3D Dodge twist & Hitstun recoil
+    // Committed dodge tumble: tuck limbs, roll towards the input direction,
+    // then unfold into a guard. Its visual safety cue ends with actual i-frames.
     if (f.dodgeTime > 0) {
-      yaw += f.dodgeTime * 20 * f.facing;
-      pitch += 0.32;
+      const progress = dodgeProgress(f.dodgeTime);
+      const turn = rollEase(progress);
+      const tuck = Math.sin(progress * Math.PI);
+      const horizontal = Math.abs(f.dodgeVectorX) > 0;
+      const direction = f.dodgeVectorX || f.facing;
+      if (horizontal) {
+        roll += Math.PI * 2 * turn * direction;
+        pitch += 0.22 * tuck;
+      } else if (f.dodgeVectorY) {
+        pitch += Math.PI * 2 * turn * -f.dodgeVectorY;
+      } else {
+        pitch += 0.65 * tuck;
+      }
+      crouch += (horizontal ? 18 : 10) * tuck;
+      this.rightHip.rotation.x = -1.25 * tuck;
+      this.leftHip.rotation.x = -1.1 * tuck;
+      this.rightKnee.rotation.x = 1.7 * tuck;
+      this.leftKnee.rotation.x = 1.6 * tuck;
+      this.rightShoulder.rotation.x = -1.35 * tuck - 0.68 * (1 - tuck);
+      this.leftShoulder.rotation.x = -1.4 * tuck - 0.62 * (1 - tuck);
+      this.rightElbow.rotation.x = -0.5 - tuck * 0.55;
+      this.leftElbow.rotation.x = -0.55 - tuck * 0.5;
+      spineTwist = direction * tuck * 0.18;
     } else if (f.stun > 0) {
       pitch -= 0.34;
       roll = -0.18 * f.facing;
@@ -2566,17 +2607,17 @@ export class FighterRig3D {
 
     this.pelvis.position.set(this.pelvis.position.x, 44 + hipBob - crouch, 0);
     this.pelvis.rotation.set(pitch, yaw, roll);
-    this.spine.rotation.set(0.05, spineTwist, 0);
+    this.spine.rotation.set(spinePitch, spineTwist, chestRoll);
     this.neck.rotation.set(
-      -pitch * 0.45,
-      -spineTwist * 0.45 - f.facing * 0.18,
-      0,
+      -pitch * 0.45 - spinePitch * 0.27,
+      -spineTwist * 0.53 - f.facing * 0.18,
+      -chestRoll * 0.5,
     );
 
     // Exponential pose blending: limbs ease between locomotion / air / attack
     // states. Attacks use a faster rate so strikes stay crisp, while idle and
     // run transitions glide. The first frame snaps into place.
-    const limbRate = attack?.move && sampleAttackMotion(attack).active ? 54 : attack ? 30 : 16;
+    const limbRate = attackMotion?.active ? 65 : attack ? 32 : f.dodgeTime > 0 ? 35 : 19;
     const k = this.poseReady ? 1 - Math.exp(-limbRate * dt) : 1;
     const kb = this.poseReady ? 1 - Math.exp(-16 * dt) : 1;
     for (let i = 0; i < 10; i++) {
@@ -2587,12 +2628,17 @@ export class FighterRig3D {
       r.z = prevRot[j + 2] + (r.z - prevRot[j + 2]) * k;
     }
     this.pelvis.rotation.x = pc[0] + (pitch - pc[0]) * kb;
-    this.pelvis.rotation.z = pc[2] + (roll - pc[2]) * kb;
-    this.spine.rotation.x = pc[3] + (0.05 - pc[3]) * kb;
+    // Complete dodge rotations without dragging a 2π angle backwards when
+    // the pose ends. Non-dodge rolls blend via the shortest angular path.
+    this.pelvis.rotation.z = f.dodgeTime > 0
+      ? roll
+      : pc[2] + Math.atan2(Math.sin(roll - pc[2]), Math.cos(roll - pc[2])) * kb;
+    this.spine.rotation.x = pc[3] + (spinePitch - pc[3]) * kb;
     this.spine.rotation.y = pc[4] + (spineTwist - pc[4]) * kb;
-    this.neck.rotation.x = pc[6] + (-pitch * 0.45 - pc[6]) * kb;
-    this.neck.rotation.y =
-      pc[7] + (-spineTwist * 0.45 - f.facing * 0.18 - pc[7]) * kb;
+    this.spine.rotation.z = pc[5] + (chestRoll - pc[5]) * kb;
+    this.neck.rotation.x = pc[6] + (-pitch * 0.45 - spinePitch * 0.27 - pc[6]) * kb;
+    this.neck.rotation.y = pc[7] + (-spineTwist * 0.53 - f.facing * 0.18 - pc[7]) * kb;
+    this.neck.rotation.z = pc[8] + (-chestRoll * 0.5 - pc[8]) * kb;
     this.poseReady = true;
 
     // Animate 3D cloth cape wave
