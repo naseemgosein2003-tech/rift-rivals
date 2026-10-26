@@ -83,7 +83,6 @@ function glow(
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
-const easeIn = (t: number) => t * t;
 
 /** Two-bone inverse kinematics, used for every arm and leg. */
 function joint(
